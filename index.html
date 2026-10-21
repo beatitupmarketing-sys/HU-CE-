@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="h-full bg-slate-900">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>戶冊數位行銷 - 內部營運管理系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(51, 65, 85, 0.8); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(71, 85, 105, 1); }
+    </style>
+</head>
+<body class="h-full text-slate-200 antialiased selection:bg-indigo-500 selection:text-white flex flex-col bg-slate-950">
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase 設定檔
+        const firebaseConfig = {
+            apiKey: "AIzaSyBdiQllHuy8VvbFdzKB9SPNeFGol4YWFrs",
+            authDomain: "hu-ce-5cbb1.firebaseapp.com",
+            projectId: "hu-ce-5cbb1",
+            storageBucket: "hu-ce-5cbb1.firebasestorage.app",
+            messagingSenderId: "882985077229",
+            appId: "1:882985077229:web:6bcaded15ec771769affe4",
+            measurementId: "G-H1Y7VDGEK7"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // 登入白名單與權限設定
+        const ADMIN_EMAILS = ['12howard1202@gmail.com'];
+        const TESTER_EMAILS = ['waynie1214520@gmail.com', 'beatitupmarketing@gmail.com'];
+        const ALLOWED_EMAILS = [...ADMIN_EMAILS, ...TESTER_EMAILS];
+
+        const googleProvider = new GoogleAuthProvider();
+        googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+        // 全域變數
+        window.firebaseApp = app;
+        window.firebaseAuth = auth;
+        window.firestoreDb = db;
+        window.currentUserRole = null; // 'admin' | 'tester' | 'guest'
+        window.currentUserEmail = null;
+        window.isFirebaseConnected = false;
+
+        window.canEditRecords = () => window.currentUserRole === 'admin';
+
+        // 執行 UI 權限限制套用
+        function applyRolePermissions() {
+            const canEdit = window.canEditRecords();
+            
+            document.querySelectorAll('.admin-only').forEach(el => {
+                if (canEdit) {
+                    el.classList.remove('hidden');
+                } else {
+                    el.classList.add('hidden');
+                }
+            });
+
+            document.querySelectorAll('.admin-select').forEach(el => {
+                el.disabled = !canEdit;
+                el.title = canEdit ? '' : '測試人員/唯讀帳號無法修改狀態';
+                if (!canEdit) el.classList.add('opacity-60', 'cursor-not-allowed');
+                else el.classList.remove('opacity-60', 'cursor-not-allowed');
+            });
+
+            const roleLabel = document.getElementById('signed-in-role-label');
+            if (roleLabel) {
+                if (window.currentUserRole === 'admin') {
+                    roleLabel.textContent = '管理員（完整權限）';
+                    roleLabel.className = 'text-[10px] font-semibold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/30';
+                } else if (window.currentUserRole === 'tester') {
+                    roleLabel.textContent = '測試人員（唯讀權限）';
+                    roleLabel.className = 'text-[10px] font-semibold text-amber-400 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-500/30';
+                } else {
+                    roleLabel.textContent = '訪客模式';
+                    roleLabel.className = 'text-[10px] font-semibold text-slate-400 bg-slate-800 px-2 py-0.5 rounded border border-slate-700';
+                }
+            }
+        }
+        window.applyRolePermissions = applyRolePermissions;
+
+        window.firebaseGoogleLogin = async () => {
+            const message = document.getElementById('login-error-message');
+            if (message) message.textContent = '';
+            try {
+                await signInWithPopup(auth, googleProvider);
+            } catch (error) {
+                console.warn('Google 登入注意：', error);
+                if (message) {
+                    if (error.code === 'auth/unauthorized-domain') {
+                        message.innerHTML = `
+                            <div class="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-left text-xs text-amber-300 space-y-1">
+                                <div class="font-bold flex items-center gap-1.5"><i class="fa-solid fa-triangle-exclamation"></i> 網域未加入授權：</div>
+                                <div>請至 Firebase 控制台 > Authentication > Settings > Authorized Domains 新增目前網域。</div>
+                                <div class="text-slate-400 pt-1">💡 提示：點選下方<b>「以測試人員方式進入」</b>即可直接跳過驗證進入系統體驗！</div>
+                            </div>
+                        `;
+                    } else {
+                        message.textContent = `登入失敗：${error?.message || '請確認 Firebase Google 登入設定'}`;
+                    }
+                }
+            }
+        };
+
+        // 測試人員/展示模式直接進入
+        window.enterAsDemoTester = () => {
+            window.currentUserRole = 'tester';
+            window.currentUserEmail = 'demo.tester@huce.internal';
+            window.isFirebaseConnected = false;
+
+            const loginScreen = document.getElementById('firebase-login-screen');
+            const userLabel = document.getElementById('signed-in-user-label');
+            const badge = document.getElementById('sync-status-badge');
+
+            if (loginScreen) loginScreen.classList.add('hidden');
+            if (userLabel) userLabel.textContent = window.currentUserEmail;
+
+            if (badge) {
+                badge.className = 'inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20';
+                badge.innerHTML = '<span class="w-1.5 h-1.5 mr-1.5 bg-amber-400 rounded-full animate-pulse"></span> 測試人員模式（單機）';
+            }
+
+            applyRolePermissions();
+            if (window.refreshCurrentView) window.refreshCurrentView();
+            if (window.showToast) window.showToast('已以測試人員身分進入系統（唯讀權限）');
+        };
+
+        // 登出
+        window.firebaseLogout = async () => {
+            try { 
+                await signOut(auth); 
+            } catch (e) {
+                console.log(e);
+            }
+            window.currentUserRole = null;
+            window.currentUserEmail = null;
+            window.isFirebaseConnected = false;
+            const loginScreen = document.getElementById('firebase-login-screen');
+            if (loginScreen) loginScreen.classList.remove('hidden');
+        };
+
+        // 監聽 Auth 狀態
+        onAuthStateChanged(auth, async (user) => {
+            const loginScreen = document.getElementById('firebase-login-screen');
+            const userLabel = document.getElementById('signed-in-user-label');
+            const loginError = document.getElementById('login-error-message');
+
+            if (user && user.providerData.some(p => p.providerId === 'google.com')) {
+                const email = (user.email || '').trim().toLowerCase();
+
+                if (!ALLOWED_EMAILS.includes(email)) {
+                    window.isFirebaseConnected = false;
+                    window.currentUserRole = null;
+                    window.currentUserEmail = null;
+                    if (loginError) {
+                        loginError.textContent = `帳號（${email}）未在白名單內。請點選下方測試人員模式體驗。`;
+                    }
+                    await signOut(auth);
+                    if (loginScreen) loginScreen.classList.remove('hidden');
+                    return;
+                }
+
+                window.currentUserEmail = email;
+                window.currentUserRole = ADMIN_EMAILS.includes(email) ? 'admin' : 'tester';
+                window.isFirebaseConnected = true;
+
+                if (loginScreen) loginScreen.classList.add('hidden');
+                if (userLabel) userLabel.textContent = email;
+                if (loginError) loginError.textContent = '';
+
+                const badge = document.getElementById('sync-status-badge');
+                if (badge) {
+                    badge.className = 'inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+                    badge.innerHTML = `<span class="w-1.5 h-1.5 mr-1.5 bg-emerald-400 rounded-full animate-pulse"></span> ${window.currentUserRole === 'admin' ? 'Google 管理員連線' : 'Google 測試人員 (唯讀)'}`;
+                }
+
+                applyRolePermissions();
+                if (!window.firestoreListenersStarted) {
+                    window.firestoreListenersStarted = true;
+                    initFirestoreListeners(db);
+                }
+            } else {
+                if (window.currentUserRole !== 'tester') {
+                    window.isFirebaseConnected = false;
+                    window.currentUserRole = null;
+                    window.currentUserEmail = null;
+                    if (loginScreen) loginScreen.classList.remove('hidden');
+                    if (userLabel) userLabel.textContent = '尚未登入';
+                    const badge = document.getElementById('sync-status-badge');
+                    if (badge) {
+                        badge.className = 'inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20';
+                        badge.innerHTML = '<span class="w-1.5 h-1.5 mr-1.5 bg-slate-400 rounded-full"></span> 未連線';
+                    }
+                }
+            }
+        });
+
+        function initFirestoreListeners(dbInstance) {
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'huce-default-app';
+            const collections = ['projects', 'finances', 'tasks', 'clients'];
+
+            collections.forEach(colName => {
+                const colRef = collection(dbInstance, 'artifacts', appId, 'public', 'data', colName);
+                onSnapshot(colRef, (snapshot) => {
+                    const items = [];
+                    snapshot.forEach(docSnap => {
+                        items.push({ id: docSnap.id, ...docSnap.data() });
+                    });
+                    if (items.length > 0) {
+                        window.appData[colName] = items;
+                        if (window.refreshCurrentView) window.refreshCurrentView();
+                    }
+                }, (error) => {
+                    console.warn(`Firestore collection [${colName}] listener notice:`, error);
+                });
+            });
+        }
+    </script>
+
+    <div id="firebase-login-screen" class="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-8 shadow-2xl relative overflow-hidden">
+            <div class="absolute -top-12 -right-12 w-32 h-32 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none"></div>
+            
+            <div class="text-center mb-8">
+                <div class="w-16 h-16 bg-indigo-600/20 border border-indigo-500/30 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-inner">
+                    <i class="fa-solid fa-building-user text-2xl text-indigo-400"></i>
+                </div>
+                <h2 class="text-2xl font-bold text-white tracking-tight">戶冊數位行銷</h2>
+                <p class="text-xs text-slate-400 mt-1">內部營運與財務管理系統</p>
+            </div>
+
+            <div class="space-y-4">
+                <button onclick="window.firebaseGoogleLogin()" class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-medium py-3 px-4 rounded-xl transition duration-200 shadow-lg group">
+                    <svg class="w-5 h-5" viewBox="0 0 24 24">
+                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                    </svg>
+                    <span>使用 Google 帳號登入</span>
+                </button>
+
+                <div class="relative my-4">
+                    <div class="absolute inset-0 flex items-center"><div class="w-full border-t border-slate-800"></div></div>
+                    <div class="relative flex justify-center text-xs uppercase"><span class="bg-slate-900 px-2 text-slate-500">或測試體驗</span></div>
+                </div>
+
+                <button onclick="window.enterAsDemoTester()" class="w-full flex items-center justify-center gap-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 font-medium py-3 px-4 rounded-xl border border-indigo-500/30 transition duration-200">
+                    <i class="fa-solid fa-user-gear text-indigo-400"></i>
+                    <span>以測試人員方式進入（唯讀）</span>
+                </button>
+            </div>
+
+            <div id="login-error-message" class="mt-4 text-center text-xs min-h-[20px] leading-relaxed"></div>
+
+            <div class="mt-6 pt-4 border-t border-slate-800/80 text-center">
+                <p class="text-[11px] text-slate-500">權限提示：管理員可編輯數據，測試人員具唯讀權限。</p>
+            </div>
+        </div>
+    </div>
+
+    <header class="bg-slate-900/80 backdrop-blur border-b border-slate-800 sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 bg-gradient-to-tr from-indigo-600 to-violet-500 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                        <i class="fa-solid fa-cube text-white text-lg"></i>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <span class="font-bold text-slate-100 tracking-wide text-base">戶冊數位行銷</span>
+                            <span id="sync-status-badge" class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700">
+                                未連線
+                            </span>
+                        </div>
+                        <p class="text-[11px] text-slate-400">營運專案與財務收支管理系統</p>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-4">
+                    <div class="text-right hidden sm:block">
+                        <div id="signed-in-user-label" class="text-xs font-semibold text-slate-200">尚未登入</div>
+                        <div id="signed-in-role-label" class="mt-0.5"></div>
+                    </div>
+                    <button onclick="window.firebaseLogout()" title="登出系統" class="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition">
+                        <i class="fa-solid fa-right-from-bracket text-base"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col gap-6">
+        <nav class="flex space-x-2 border-b border-slate-800 pb-2 overflow-x-auto custom-scrollbar">
+            <button onclick="switchTab('dashboard')" id="tab-dashboard" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white shadow-lg shadow-indigo-600/30">
+                <i class="fa-solid fa-chart-line mr-2"></i>營運儀表板
+            </button>
+            <button onclick="switchTab('projects')" id="tab-projects" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200 hover:bg-slate-800">
+                <i class="fa-solid fa-diagram-project mr-2"></i>專案追蹤
+            </button>
+            <button onclick="switchTab('finances')" id="tab-finances" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200 hover:bg-slate-800">
+                <i class="fa-solid fa-wallet mr-2"></i>財務收支
+            </button>
+            <button onclick="switchTab('tasks')" id="tab-tasks" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200 hover:bg-slate-800">
+                <i class="fa-solid fa-list-check mr-2"></i>待辦工作
+            </button>
+        </nav>
+
+        <main id="main-content" class="flex-1">
+            <!-- Dynamic Content -->
+        </main>
+    </div>
+
+    <div id="toast" class="fixed bottom-6 right-6 z-50 translate-y-20 opacity-0 transition-all duration-300 bg-slate-800 border border-slate-700 text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3">
+        <i id="toast-icon" class="fa-solid fa-circle-info text-indigo-400"></i>
+        <span id="toast-text" class="text-sm"></span>
+    </div>
+
+    <script>
+        window.appData = {
+            projects: [
+                { id: 'p1', name: '品牌年度社群代操', client: '品牌 A', budget: 120000, status: '進行中', deadline: '2026-11-30' },
+                { id: 'p2', name: 'SEO 關鍵字優化案', client: '企業 B', budget: 85000, status: '規劃中', deadline: '2026-12-15' }
+            ],
+            finances: [
+                { id: 'f1', title: '社群代操第一期款', type: 'income', amount: 60000, date: '2026-10-01', category: '專案收入' },
+                { id: 'f2', title: '廣告投放成本', type: 'expense', amount: 15000, date: '2026-10-05', category: '行銷廣告' }
+            ],
+            tasks: [
+                { id: 't1', title: '撰寫 11 月社群排版貼文', project: '品牌年度社群代操', assignee: 'Howard', status: '進行中' },
+                { id: 't2', title: '產出關鍵字研究報告', project: 'SEO 關鍵字優化案', assignee: 'Waynie', status: '未開始' }
+            ]
+        };
+
+        let currentTab = 'dashboard';
+
+        function switchTab(tabName) {
+            currentTab = tabName;
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.className = 'tab-btn px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200 hover:bg-slate-800';
+            });
+            const activeBtn = document.getElementById(`tab-${tabName}`);
+            if (activeBtn) {
+                activeBtn.className = 'tab-btn px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white shadow-lg shadow-indigo-600/30';
+            }
+            refreshCurrentView();
+        }
+
+        function refreshCurrentView() {
+            const main = document.getElementById('main-content');
+            if (!main) return;
+
+            if (currentTab === 'dashboard') renderDashboard(main);
+            else if (currentTab === 'projects') renderProjects(main);
+            else if (currentTab === 'finances') renderFinances(main);
+            else if (currentTab === 'tasks') renderTasks(main);
+
+            if (window.applyRolePermissions) window.applyRolePermissions();
+        }
+        window.refreshCurrentView = refreshCurrentView;
+
+        function renderDashboard(container) {
+            const totalBudget = window.appData.projects.reduce((acc, cur) => acc + Number(cur.budget || 0), 0);
+            const totalIncome = window.appData.finances.filter(f => f.type === 'income').reduce((acc, cur) => acc + Number(cur.amount || 0), 0);
+            const totalExpense = window.appData.finances.filter(f => f.type === 'expense').reduce((acc, cur) => acc + Number(cur.amount || 0), 0);
+            const netProfit = totalIncome - totalExpense;
+
+            container.innerHTML = `
+                <div class="space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-sm">
+                            <div class="text-xs font-medium text-slate-400">專案總預算</div>
+                            <div class="text-2xl font-bold text-slate-100 mt-2">NT$ ${totalBudget.toLocaleString()}</div>
+                        </div>
+                        <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-sm">
+                            <div class="text-xs font-medium text-emerald-400">累計收入</div>
+                            <div class="text-2xl font-bold text-emerald-400 mt-2">NT$ ${totalIncome.toLocaleString()}</div>
+                        </div>
+                        <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-sm">
+                            <div class="text-xs font-medium text-rose-400">累計支出</div>
+                            <div class="text-2xl font-bold text-rose-400 mt-2">NT$ ${totalExpense.toLocaleString()}</div>
+                        </div>
+                        <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-sm">
+                            <div class="text-xs font-medium text-indigo-400">淨利潤</div>
+                            <div class="text-2xl font-bold ${netProfit >= 0 ? 'text-indigo-400' : 'text-rose-400'} mt-2">NT$ ${netProfit.toLocaleString()}</div>
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl">
+                        <h3 class="text-base font-semibold text-slate-200 mb-4">系統概覽</h3>
+                        <p class="text-sm text-slate-400 leading-relaxed">
+                            歡迎使用戶冊數位行銷內部營運管理系統。本系統支援 Google 驗證權限控管與實時數據同步，點擊上方頁籤可進行專案、財務及待辦事項的管理。
+                        </p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderProjects(container) {
+            let rows = window.appData.projects.map(p => `
+                <tr class="border-b border-slate-800/60 hover:bg-slate-800/30">
+                    <td class="py-3 px-4 text-sm font-medium text-slate-200">${p.name}</td>
+                    <td class="py-3 px-4 text-sm text-slate-400">${p.client}</td>
+                    <td class="py-3 px-4 text-sm text-emerald-400">NT$ ${Number(p.budget).toLocaleString()}</td>
+                    <td class="py-3 px-4 text-sm">
+                        <span class="px-2.5 py-1 rounded-full text-xs font-medium ${p.status === '進行中' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' : 'bg-slate-700/50 text-slate-400'}">
+                            ${p.status}
+                        </span>
+                    </td>
+                    <td class="py-3 px-4 text-sm text-slate-400">${p.deadline}</td>
+                </tr>
+            `).join('');
+
+            container.innerHTML = `
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                    <div class="flex items-center justify-between mb-6">
+                        <h3 class="text-lg font-bold text-slate-100">專案列表</h3>
+                        <button onclick="showToast('請使用管理員權限進行新增')" class="admin-only px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-medium shadow-md transition">
+                            <i class="fa-solid fa-plus mr-1.5"></i>新增專案
+                        </button>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="border-b border-slate-800 text-slate-400 text-xs uppercase">
+                                    <th class="py-3 px-4">專案名稱</th>
+                                    <th class="py-3 px-4">客戶名稱</th>
+                                    <th class="py-3 px-4">預算金額</th>
+                                    <th class="py-3 px-4">狀態</th>
+                                    <th class="py-3 px-4">截止日期</th>
+                                </tr>
+                            </thead>
+                            <tbody>${rows || '<tr><td colspan="5" class="text-center py-6 text-slate-500 text-sm">尚無專案資料</td></tr>'}</tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderFinances(container) {
+            let rows = window.appData.finances.map(f => `
+                <tr class="border-b border-slate-800/60 hover:bg-slate-800/30">
+                    <td class="py-3 px-4 text-sm font-medium text-slate-200">${f.title}</td>
+                    <td class="py-3 px-4 text-sm">
+                        <span class="px-2 py-0.5 rounded text-xs ${f.type === 'income' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'}">
+                            ${f.type === 'income' ? '收入' : '支出'}
+                        </span>
+                    </td>
+                    <td class="py-3 px-4 text-sm ${f.type === 'income' ? 'text-emerald-400' : 'text-rose-400'}">
+                        ${f.type === 'income' ? '+' : '-'} NT$ ${Number(f.amount).toLocaleString()}
+                    </td>
+                    <td class="py-3 px-4 text-sm text-slate-400">${f.category}</td>
+                    <td class="py-3 px-4 text-sm text-slate-400">${f.date}</td>
+                </tr>
+            `).join('');
+
+            container.innerHTML = `
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                    <div class="flex items-center justify-between mb-6">
+                        <h3 class="text-lg font-bold text-slate-100">財務紀錄</h3>
+                        <button onclick="showToast('請使用管理員權限進行新增')" class="admin-only px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-medium shadow-md transition">
+                            <i class="fa-solid fa-plus mr-1.5"></i>新增收支
+                        </button>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="border-b border-slate-800 text-slate-400 text-xs uppercase">
+                                    <th class="py-3 px-4">項目</th>
+                                    <th class="py-3 px-4">類型</th>
+                                    <th class="py-3 px-4">金額</th>
+                                    <th class="py-3 px-4">分類</th>
+                                    <th class="py-3 px-4">日期</th>
+                                </tr>
+                            </thead>
+                            <tbody>${rows || '<tr><td colspan="5" class="text-center py-6 text-slate-500 text-sm">尚無財務紀錄</td></tr>'}</tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderTasks(container) {
+            let rows = window.appData.tasks.map(t => `
+                <tr class="border-b border-slate-800/60 hover:bg-slate-800/30">
+                    <td class="py-3 px-4 text-sm font-medium text-slate-200">${t.title}</td>
+                    <td class="py-3 px-4 text-sm text-slate-400">${t.project}</td>
+                    <td class="py-3 px-4 text-sm text-slate-300">${t.assignee}</td>
+                    <td class="py-3 px-4 text-sm">
+                        <span class="px-2 py-0.5 rounded text-xs bg-slate-800 text-slate-300 border border-slate-700">${t.status}</span>
+                    </td>
+                </tr>
+            `).join('');
+
+            container.innerHTML = `
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                    <div class="flex items-center justify-between mb-6">
+                        <h3 class="text-lg font-bold text-slate-100">待辦事項</h3>
+                        <button onclick="showToast('請使用管理員權限進行新增')" class="admin-only px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-medium shadow-md transition">
+                            <i class="fa-solid fa-plus mr-1.5"></i>新增工作
+                        </button>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="border-b border-slate-800 text-slate-400 text-xs uppercase">
+                                    <th class="py-3 px-4">工作項目</th>
+                                    <th class="py-3 px-4">對應專案</th>
+                                    <th class="py-3 px-4">負責人</th>
+                                    <th class="py-3 px-4">狀態</th>
+                                </tr>
+                            </thead>
+                            <tbody>${rows || '<tr><td colspan="4" class="text-center py-6 text-slate-500 text-sm">尚無待辦事項</td></tr>'}</tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            const text = document.getElementById('toast-text');
+            if (!toast || !text) return;
+
+            text.textContent = message;
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            toast.classList.add('translate-y-0', 'opacity-100');
+
+            setTimeout(() => {
+                toast.classList.remove('translate-y-0', 'opacity-100');
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 3000);
+        }
+        window.showToast = showToast;
+
+        window.onload = () => {
+            refreshCurrentView();
+        };
+    </script>
+</body>
+</html>
