@@ -1,0 +1,1614 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>戶冊數位行銷 - 內部營運管理系統 (Firebase 雲端版)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- SheetJS (xlsx) for Excel Export -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+    <!-- Firebase SDK (Modular v10) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-analytics.js";
+
+        // Your web app's Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBdiQllHuy8VvbFdzKB9SPNeFGol4YWFrs",
+            authDomain: "hu-ce-5cbb1.firebaseapp.com",
+            projectId: "hu-ce-5cbb1",
+            storageBucket: "hu-ce-5cbb1.firebasestorage.app",
+            messagingSenderId: "882985077229",
+            appId: "1:882985077229:web:6bcaded15ec771769affe4",
+            measurementId: "G-H1Y7VDGEK7"
+        };
+
+        try {
+            const app = initializeApp(firebaseConfig);
+            const db = getFirestore(app);
+            const auth = getAuth(app);
+            const analytics = getAnalytics(app);
+            const googleProvider = new GoogleAuthProvider();
+
+            window.firebaseApp = app;
+            window.firebaseDb = db;
+            window.firebaseAuth = auth;
+            window.firebaseAnalytics = analytics;
+
+            window.isFirebaseConnected = true;
+            
+            // 監聽登入狀態變更
+            onAuthStateChanged(auth, (user) => {
+                const userProfileEl = document.getElementById('user-profile-info');
+                const badge = document.getElementById('sync-status-badge');
+                
+                if (user) {
+                    window.currentUser = user;
+                    if (badge) {
+                        badge.className = 'inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+                        badge.innerHTML = '<span class="w-1.5 h-1.5 mr-1.5 bg-emerald-400 rounded-full animate-pulse"></span> 雲端連線 (已登入)';
+                    }
+                    if (userProfileEl) {
+                        userProfileEl.innerHTML = `
+                            <div class="flex items-center space-x-2.5 bg-slate-800/80 p-2 rounded-xl border border-slate-700/60">
+                                <img src="${user.photoURL || 'https://placehold.co/100x100/6366f1/ffffff?text=User'}" class="w-8 h-8 rounded-full border border-brand-500/50" alt="avatar" />
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-xs font-bold text-white truncate">${user.displayName || '使用者'}</div>
+                                    <div class="text-[10px] text-slate-400 truncate">${user.email}</div>
+                                </div>
+                                <button onclick="handleLogout()" class="text-slate-400 hover:text-rose-400 p-1 rounded-lg hover:bg-slate-700/50 transition" title="登出">
+                                    <i class="fa-solid fa-right-from-bracket text-xs"></i>
+                                </button>
+                            </div>
+                        `;
+                    }
+                } else {
+                    window.currentUser = null;
+                    if (badge) {
+                        badge.className = 'inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20';
+                        badge.innerHTML = '<span class="w-1.5 h-1.5 mr-1.5 bg-amber-400 rounded-full"></span> 未登入 (存取受限)';
+                    }
+                    if (userProfileEl) {
+                        userProfileEl.innerHTML = `
+                            <button onclick="handleGoogleLogin()" class="w-full bg-slate-800 hover:bg-slate-700 text-white p-2.5 rounded-xl border border-slate-700/80 font-medium transition flex items-center justify-center space-x-2 text-xs">
+                                <i class="fa-brands fa-google text-brand-500"></i>
+                                <span>Google 帳號登入</span>
+                            </button>
+                        `;
+                    }
+                }
+                
+                // 狀態變更後重新整理畫面
+                if (typeof window.refreshCurrentView === 'function') {
+                    window.refreshCurrentView();
+                }
+            });
+
+            // Google 登入方法
+            window.handleGoogleLogin = async () => {
+                try {
+                    await signInWithPopup(auth, googleProvider);
+                    if (typeof window.showToast === 'function') window.showToast('Google 登入成功！');
+                } catch (error) {
+                    console.error("Google 登入失敗:", error);
+                    if (error.code === 'auth/unauthorized-domain') {
+                        const currentDomain = window.location.hostname || '當前網域';
+                        if (typeof window.showModalNotice === 'function') {
+                            window.showModalNotice(
+                                '網域未授權提示 (auth/unauthorized-domain)',
+                                `<p class="mb-3">當前運行的網域 <strong>${currentDomain}</strong> 尚未加入 Firebase 控制台授權名單，導致 Google 登入驗證被拒絕。</p>
+                                 <div class="bg-amber-50 text-amber-800 p-3 rounded-xl border border-amber-200 text-xs leading-relaxed space-y-1 mb-3">
+                                    <div class="font-bold mb-1"><i class="fa-solid fa-lightbulb text-amber-600 mr-1"></i> 如何解決？</div>
+                                    <ol class="list-decimal list-inside space-y-1">
+                                        <li>前往 <a href="https://console.firebase.google.com/" target="_blank" class="underline text-brand-600 font-bold">Firebase Console</a>。</li>
+                                        <li>進入專案 <strong>hu-ce-5cbb1</strong> &gt; <strong>Authentication</strong> &gt; <strong>Settings</strong>。</li>
+                                        <li>點擊 <strong>Authorized domains</strong> 頁籤。</li>
+                                        <li>新增網域：<code class="bg-amber-100 px-1.5 py-0.5 rounded font-mono text-amber-900">${currentDomain}</code>。</li>
+                                    </ol>
+                                 </div>`
+                            );
+                        } else if (typeof window.showToast === 'function') {
+                            window.showToast(`登入失敗：當前網域 (${currentDomain}) 尚未授權，請至 Firebase 設定 Authorized domains。`);
+                        }
+                    } else if (typeof window.showToast === 'function') {
+                        window.showToast('登入失敗或已取消');
+                    }
+                }
+            };
+
+            // 登出方法
+            window.handleLogout = async () => {
+                try {
+                    await signOut(auth);
+                    if (typeof window.showToast === 'function') window.showToast('已安全登出');
+                } catch (error) {
+                    console.error("登出失敗:", error);
+                }
+            };
+
+            // 初始化 Firestore 資料監聽與同步
+            initFirestoreListeners(db);
+
+            function initFirestoreListeners(database) {
+                if (!window.appData) {
+                    window.appData = {
+                        selfDeduct: [],
+                        expense: [],
+                        inflow: [],
+                        receivable: []
+                    };
+                }
+
+                const collections = ['selfDeduct', 'expense', 'inflow', 'receivable'];
+                collections.forEach(colName => {
+                    onSnapshot(collection(database, colName), (snapshot) => {
+                        const items = [];
+                        snapshot.forEach((docSnap) => {
+                            items.push({ id: docSnap.id, ...docSnap.data() });
+                        });
+                        window.appData[colName] = items;
+                        window.appDataLoadedFromCloud = true;
+                        if (typeof window.refreshCurrentView === 'function') {
+                            window.refreshCurrentView();
+                        }
+                    }, (error) => {
+                        console.warn(`Firestore sync warning for ${colName}:`, error);
+                    });
+                });
+            }
+
+            window.fbAddRecord = async (type, data) => {
+                if (!auth.currentUser) throw new Error("未登入使用者無法新增資料");
+                const uid = auth.currentUser.uid;
+                const userEmail = auth.currentUser.email;
+                const userName = auth.currentUser.displayName;
+                const recordData = { ...data, userId: uid, userEmail, userName, updatedAt: new Date().toISOString() };
+                await addDoc(collection(db, type), recordData);
+            };
+
+            window.fbDeleteRecord = async (type, id) => {
+                if (!auth.currentUser) throw new Error("未登入使用者無法刪除資料");
+                await deleteDoc(doc(db, type, id));
+            };
+
+            window.fbUpdateRecord = async (type, id, data) => {
+                if (!auth.currentUser) throw new Error("未登入使用者無法更新資料");
+                const { updateDoc, doc: docRef } = await import("https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js");
+                const uid = auth.currentUser.uid;
+                const userEmail = auth.currentUser.email;
+                const userName = auth.currentUser.displayName;
+                const recordData = { ...data, userId: uid, userEmail, userName, updatedAt: new Date().toISOString() };
+                await updateDoc(docRef(db, type, id), recordData);
+            };
+
+        } catch (err) {
+            console.error("Firebase Initialization Error:", err);
+            window.isFirebaseConnected = false;
+        }
+    </script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        slate: {
+                            850: '#131e32',
+                            900: '#0f172a',
+                            950: '#020617'
+                        },
+                        brand: {
+                            50: '#eef2ff',
+                            100: '#e0e7ff',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans TC", sans-serif;
+            background-color: #f8fafc;
+        }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(8px);
+        }
+    </style>
+</head>
+<body class="text-slate-800 antialiased flex h-screen overflow-hidden">
+
+    <!-- 左側導覽列 -->
+    <aside class="w-64 bg-slate-900 text-slate-300 flex flex-col justify-between shrink-0 shadow-2xl z-20 border-r border-slate-800/60">
+        <div>
+            <!-- Logo 標題 -->
+            <div class="p-6 border-b border-slate-800/80 flex items-center space-x-3.5">
+                <div class="bg-gradient-to-tr from-brand-600 to-indigo-500 text-white p-2.5 rounded-xl shadow-lg shadow-indigo-500/30">
+                    <i class="fa-solid fa-chart-line text-lg"></i>
+                </div>
+                <div>
+                    <h1 class="text-white font-bold text-base tracking-wide leading-tight">戶冊數位行銷</h1>
+                    <p class="text-[11px] text-slate-400 font-medium">營運財務管理系統</p>
+                </div>
+            </div>
+
+            <!-- 主選單 -->
+            <nav class="p-4 space-y-1.5 text-sm font-medium">
+                <button onclick="switchTab('dashboard')" id="nav-dashboard" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition duration-200 text-left bg-brand-600 text-white shadow-md shadow-brand-500/20">
+                    <i class="fa-solid fa-house-chimney w-5 text-center opacity-90"></i>
+                    <span>營運總覽</span>
+                </button>
+                <button onclick="switchTab('selfDeduct')" id="nav-selfDeduct" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition duration-200 text-left text-slate-400 hover:bg-slate-800/60 hover:text-white">
+                    <i class="fa-solid fa-scale-balanced w-5 text-center opacity-70"></i>
+                    <span>自負額管理</span>
+                </button>
+                <button onclick="switchTab('expense')" id="nav-expense" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition duration-200 text-left text-slate-400 hover:bg-slate-800/60 hover:text-white">
+                    <i class="fa-solid fa-file-invoice-dollar w-5 text-center opacity-70"></i>
+                    <span>支出管理</span>
+                </button>
+                <button onclick="switchTab('inflow')" id="nav-inflow" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition duration-200 text-left text-slate-400 hover:bg-slate-800/60 hover:text-white">
+                    <i class="fa-solid fa-wallet w-5 text-center opacity-70"></i>
+                    <span>進帳管理</span>
+                </button>
+                <button onclick="switchTab('receivable')" id="nav-receivable" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition duration-200 text-left text-slate-400 hover:bg-slate-800/60 hover:text-white">
+                    <i class="fa-solid fa-users-rectangle w-5 text-center opacity-70"></i>
+                    <span>客戶收款／應收款</span>
+                </button>
+            </nav>
+        </div>
+
+        <!-- 雲端狀態與備份 -->
+        <div class="p-4 border-t border-slate-800/80 text-xs text-slate-400 space-y-3 bg-slate-950/40">
+            <!-- 帳號登入資訊欄位 -->
+            <div id="user-profile-info">
+                <button onclick="handleGoogleLogin()" class="w-full bg-slate-800 hover:bg-slate-700 text-white p-2.5 rounded-xl border border-slate-700/80 font-medium transition flex items-center justify-center space-x-2 text-xs">
+                    <i class="fa-brands fa-google text-brand-500"></i>
+                    <span>Google 帳號登入</span>
+                </button>
+            </div>
+
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-slate-400 font-medium">系統狀態</span>
+                <span id="sync-status-badge" class="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    <span class="w-1.5 h-1.5 mr-1.5 bg-amber-400 rounded-full animate-pulse"></span> 連線初始化中...
+                </span>
+            </div>
+            <div class="pt-1 flex space-x-2">
+                <button onclick="exportAllDataToExcel()" class="flex-1 bg-brand-600 hover:bg-brand-500 text-white py-2 px-2 rounded-lg text-center font-medium transition shadow-sm">匯出 Excel</button>
+            </div>
+        </div>
+    </aside>
+
+    <!-- 右側工作區 -->
+    <main class="flex-1 flex flex-col h-screen overflow-hidden">
+        <!-- 頂部列 -->
+        <header class="bg-white/90 backdrop-blur-md border-b border-slate-200/80 h-16 flex items-center justify-between px-8 shrink-0 z-10">
+            <div class="flex items-center space-x-4">
+                <h2 id="current-page-title" class="text-lg font-bold text-slate-900 tracking-tight">營運總覽</h2>
+                <span class="text-[11px] font-semibold bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full border border-emerald-200/80">Firebase 雲端同步</span>
+            </div>
+            <div class="flex items-center space-x-5">
+                <div class="text-right">
+                    <div class="text-[11px] text-slate-400 font-medium uppercase tracking-wider">今日日期</div>
+                    <div id="header-date" class="text-xs font-semibold text-slate-700">2026/10/21</div>
+                </div>
+            </div>
+        </header>
+
+        <!-- 內容捲動區 -->
+        <div class="flex-1 overflow-y-auto p-8 bg-slate-50/50" id="main-content-area">
+            
+            <!-- ================= 1. 營運總覽 ================= -->
+            <section id="tab-dashboard" class="space-y-6">
+                <!-- 時間篩選列 -->
+                <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200/70 flex flex-wrap items-center justify-between gap-4">
+                    <div class="flex flex-wrap items-center gap-3">
+                        <span class="text-xs font-bold text-slate-600 uppercase tracking-wider"><i class="fa-solid fa-sliders text-brand-600 mr-2"></i>時間篩選</span>
+                        
+                        <div class="flex items-center space-x-2 bg-slate-100/80 p-1.5 rounded-xl border border-slate-200/60">
+                            <!-- 年份選擇 -->
+                            <select id="filter-year-select" onchange="onCustomDateChange()" class="bg-white border border-slate-200 text-slate-700 text-xs rounded-lg px-2.5 py-1.5 font-medium focus:outline-none focus:ring-2 focus:ring-brand-500/20">
+                                <option value="2026">2026 年</option>
+                                <option value="2025">2025 年</option>
+                                <option value="2024">2024 年</option>
+                                <option value="2023">2023 年</option>
+                            </select>
+
+                            <!-- 月份選擇 -->
+                            <select id="filter-month-select" onchange="onCustomDateChange()" class="bg-white border border-slate-200 text-slate-700 text-xs rounded-lg px-2.5 py-1.5 font-medium focus:outline-none focus:ring-2 focus:ring-brand-500/20">
+                                <option value="all-months">全年 (1-12月)</option>
+                                <option value="01">01 月</option>
+                                <option value="02">02 月</option>
+                                <option value="03">03 月</option>
+                                <option value="04">04 月</option>
+                                <option value="05">05 月</option>
+                                <option value="06">06 月</option>
+                                <option value="07">07 月</option>
+                                <option value="08">08 月</option>
+                                <option value="09">09 月</option>
+                                <option value="10">10 月</option>
+                                <option value="11">11 月</option>
+                                <option value="12">12 月</option>
+                            </select>
+                        </div>
+
+                        <!-- 快速切換按鈕 -->
+                        <div class="inline-flex rounded-xl bg-slate-100/80 p-1 border border-slate-200/60">
+                            <button onclick="setDashboardQuickFilter('currentMonth')" id="btn-filter-currentMonth" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-brand-600 shadow-sm transition">本月</button>
+                            <button onclick="setDashboardQuickFilter('lastMonth')" id="btn-filter-lastMonth" class="px-3 py-1.5 text-xs font-medium rounded-lg text-slate-600 hover:text-slate-900 transition">上月</button>
+                            <button onclick="setDashboardQuickFilter('all')" id="btn-filter-all" class="px-3 py-1.5 text-xs font-medium rounded-lg text-slate-600 hover:text-slate-900 transition">全部歷史</button>
+                        </div>
+                    </div>
+
+                    <div id="filter-date-range-label" class="text-xs text-slate-500 font-semibold bg-slate-100/60 px-3 py-1.5 rounded-lg border border-slate-200/50">
+                        目前檢視區間：2026年10月
+                    </div>
+                </div>
+
+                <!-- 財務數據指標卡片 -->
+                <div>
+                    <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3.5 flex items-center">
+                        <i class="fa-solid fa-chart-pie mr-2 text-slate-400"></i>財務指標數據 (點擊卡片可切換至對應管理模組)
+                    </h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <div onclick="switchTab('inflow')" class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/70 hover:border-brand-500/50 hover:shadow-md transition cursor-pointer group">
+                            <div class="flex justify-between items-start mb-2.5">
+                                <span class="text-xs font-bold text-slate-500 group-hover:text-brand-600 transition">營業收入</span>
+                                <span class="p-2 bg-emerald-50 text-emerald-600 rounded-xl group-hover:bg-emerald-100 transition"><i class="fa-solid fa-coins text-sm"></i></span>
+                            </div>
+                            <div id="kpi-op-revenue" class="text-2xl font-extrabold text-slate-800 tracking-tight">NT\$ 0</div>
+                            <div class="text-[11px] text-slate-400 mt-1">選定區間之總營業額</div>
+                        </div>
+                        <div onclick="switchTab('inflow')" class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/70 hover:border-brand-500/50 hover:shadow-md transition cursor-pointer group">
+                            <div class="flex justify-between items-start mb-2.5">
+                                <span class="text-xs font-bold text-slate-500 group-hover:text-brand-600 transition">實際進帳</span>
+                                <span class="p-2 bg-emerald-50 text-emerald-600 rounded-xl group-hover:bg-emerald-100 transition"><i class="fa-solid fa-arrow-down-long text-sm"></i></span>
+                            </div>
+                            <div id="kpi-actual-inflow" class="text-2xl font-extrabold text-emerald-600 tracking-tight">NT\$ 0</div>
+                            <div class="text-[11px] text-slate-400 mt-1">實際收到之總資金</div>
+                        </div>
+                        <div onclick="switchTab('expense')" class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/70 hover:border-brand-500/50 hover:shadow-md transition cursor-pointer group">
+                            <div class="flex justify-between items-start mb-2.5">
+                                <span class="text-xs font-bold text-slate-500 group-hover:text-brand-600 transition">總支出</span>
+                                <span class="p-2 bg-rose-50 text-rose-600 rounded-xl group-hover:bg-rose-100 transition"><i class="fa-solid fa-receipt text-sm"></i></span>
+                            </div>
+                            <div id="kpi-total-expense" class="text-2xl font-extrabold text-rose-600 tracking-tight">NT\$ 0</div>
+                            <div class="text-[11px] text-slate-400 mt-1">含營運與廣告各項支出</div>
+                        </div>
+                        <div onclick="switchTab('selfDeduct')" class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/70 hover:border-brand-500/50 hover:shadow-md transition cursor-pointer group">
+                            <div class="flex justify-between items-start mb-2.5">
+                                <span class="text-xs font-bold text-slate-500 group-hover:text-brand-600 transition">自負額總額</span>
+                                <span class="p-2 bg-amber-50 text-amber-600 rounded-xl group-hover:bg-amber-100 transition"><i class="fa-solid fa-scale-balanced text-sm"></i></span>
+                            </div>
+                            <div id="kpi-total-selfDeduct" class="text-2xl font-extrabold text-amber-600 tracking-tight">NT\$ 0</div>
+                            <div class="text-[11px] text-slate-400 mt-1">已記錄之自負額合計</div>
+                        </div>
+                        <div onclick="switchTab('receivable')" class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/70 hover:border-brand-500/50 hover:shadow-md transition cursor-pointer group">
+                            <div class="flex justify-between items-start mb-2.5">
+                                <span class="text-xs font-bold text-slate-500 group-hover:text-brand-600 transition">客戶未收尾款</span>
+                                <span class="p-2 bg-sky-50 text-sky-600 rounded-xl group-hover:bg-sky-100 transition"><i class="fa-solid fa-users-rectangle text-sm"></i></span>
+                            </div>
+                            <div id="kpi-total-receivable" class="text-2xl font-extrabold text-sky-600 tracking-tight">NT\$ 0</div>
+                            <div class="text-[11px] text-slate-400 mt-1">尚未收齊之合約尾款</div>
+                        </div>
+                        <div onclick="switchTab('selfDeduct')" class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/70 hover:border-brand-500/50 hover:shadow-md transition cursor-pointer group">
+                            <div class="flex justify-between items-start mb-2.5">
+                                <span class="text-xs font-bold text-slate-500 group-hover:text-brand-600 transition">本月淨利 / 結餘</span>
+                                <span class="p-2 bg-indigo-50 text-indigo-600 rounded-xl group-hover:bg-indigo-100 transition"><i class="fa-solid fa-wallet text-sm"></i></span>
+                            </div>
+                            <div id="kpi-net-profit" class="text-2xl font-extrabold text-indigo-600 tracking-tight">NT\$ 0</div>
+                            <div class="text-[11px] text-slate-400 mt-1">進帳減去總支出與自負額</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 圖表分析區 -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div class="lg:col-span-2 bg-white p-6 rounded-2xl shadow-sm border border-slate-200/70">
+                        <div class="flex items-center justify-between mb-4">
+                            <h4 class="font-bold text-slate-800 text-sm">營運收支趨勢分析</h4>
+                            <span class="text-xs text-slate-400">現金流狀況</span>
+                        </div>
+                        <div class="h-72 relative">
+                            <canvas id="mainTrendChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/70">
+                        <div class="flex items-center justify-between mb-4">
+                            <h4 class="font-bold text-slate-800 text-sm">支出項目佔比</h4>
+                            <span class="text-xs text-slate-400">分佈情形</span>
+                        </div>
+                        <div class="h-72 relative flex items-center justify-center">
+                            <canvas id="expensePieChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ================= 2. 自負額管理 ================= -->
+            <section id="tab-selfDeduct" class="space-y-6 hidden">
+                <div class="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-200/70">
+                    <div>
+                        <h3 class="text-base font-bold text-slate-900">自負額管理</h3>
+                        <p class="text-xs text-slate-500 mt-1">管理各項目之自負額度、付款人與結算進度。</p>
+                    </div>
+                    <button onclick="openModal('selfDeduct')" class="bg-brand-600 hover:bg-brand-500 text-white px-4 py-2.5 rounded-xl text-xs font-semibold shadow-sm transition flex items-center space-x-2">
+                        <i class="fa-solid fa-plus"></i><span>新增自負額記錄</span>
+                    </button>
+                </div>
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-200/70 overflow-hidden">
+                    <table class="w-full text-left border-collapse text-xs">
+                        <thead>
+                            <tr class="bg-slate-50/80 text-slate-500 border-b border-slate-200/80">
+                                <th class="p-4 font-semibold">日期</th>
+                                <th class="p-4 font-semibold">項目</th>
+                                <th class="p-4 font-semibold">付款人</th>
+                                <th class="p-4 font-semibold text-right">自負額金額</th>
+                                <th class="p-4 font-semibold">狀態</th>
+                                <th class="p-4 font-semibold">備註</th>
+                                <th class="p-4 font-semibold text-center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="selfDeduct-table-body" class="divide-y divide-slate-100"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- ================= 3. 支出管理 ================= -->
+            <section id="tab-expense" class="space-y-6 hidden">
+                <div class="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-200/70">
+                    <div>
+                        <h3 class="text-base font-bold text-slate-900">日常支出與營運成本管理</h3>
+                        <p class="text-xs text-slate-500 mt-1">記錄所有廣告費、軟體訂閱、薪資與雜支明細。</p>
+                    </div>
+                    <button onclick="openModal('expense')" class="bg-brand-600 hover:bg-brand-500 text-white px-4 py-2.5 rounded-xl text-xs font-semibold shadow-sm transition flex items-center space-x-2">
+                        <i class="fa-solid fa-plus"></i><span>新增支出項目</span>
+                    </button>
+                </div>
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-200/70 overflow-hidden">
+                    <table class="w-full text-left border-collapse text-xs">
+                        <thead>
+                            <tr class="bg-slate-50/80 text-slate-500 border-b border-slate-200/80">
+                                <th class="p-4 font-semibold">日期</th>
+                                <th class="p-4 font-semibold">支出項目 / 說明</th>
+                                <th class="p-4 font-semibold">類別</th>
+                                <th class="p-4 font-semibold text-right">金額</th>
+                                <th class="p-4 font-semibold">付款方式</th>
+                                <th class="p-4 font-semibold">備註</th>
+                                <th class="p-4 font-semibold text-center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="expense-table-body" class="divide-y divide-slate-100"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- ================= 4. 進帳管理 ================= -->
+            <section id="tab-inflow" class="space-y-6 hidden">
+                <div class="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-200/70">
+                    <div>
+                        <h3 class="text-base font-bold text-slate-900">進帳與營收管理</h3>
+                        <p class="text-xs text-slate-500 mt-1">追蹤所有客戶付款、專案尾款與實際入帳金額。</p>
+                    </div>
+                    <button onclick="openModal('inflow')" class="bg-brand-600 hover:bg-brand-500 text-white px-4 py-2.5 rounded-xl text-xs font-semibold shadow-sm transition flex items-center space-x-2">
+                        <i class="fa-solid fa-plus"></i><span>新增進帳記錄</span>
+                    </button>
+                </div>
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-200/70 overflow-hidden">
+                    <table class="w-full text-left border-collapse text-xs">
+                        <thead>
+                            <tr class="bg-slate-50/80 text-slate-500 border-b border-slate-200/80">
+                                <th class="p-4 font-semibold">日期</th>
+                                <th class="p-4 font-semibold">客戶 / 專案名稱</th>
+                                <th class="p-4 font-semibold">性質分類</th>
+                                <th class="p-4 font-semibold text-right">進帳金額</th>
+                                <th class="p-4 font-semibold">付款方式 / 帳戶</th>
+                                <th class="p-4 font-semibold">後五碼</th>
+                                <th class="p-4 font-semibold">備註</th>
+                                <th class="p-4 font-semibold text-center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inflow-table-body" class="divide-y divide-slate-100"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- ================= 5. 客戶收款／應收款 ================= -->
+            <section id="tab-receivable" class="space-y-6 hidden">
+                <div class="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-200/70">
+                    <div>
+                        <h3 class="text-base font-bold text-slate-900">客戶收款與應收帳款管理</h3>
+                        <p class="text-xs text-slate-500 mt-1">管理各客戶之應收款項、合約總額與已收/未收餘額。</p>
+                    </div>
+                    <button onclick="openModal('receivable')" class="bg-brand-600 hover:bg-brand-500 text-white px-4 py-2.5 rounded-xl text-xs font-semibold shadow-sm transition flex items-center space-x-2">
+                        <i class="fa-solid fa-plus"></i><span>新增應收款項</span>
+                    </button>
+                </div>
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-200/70 overflow-hidden">
+                    <table class="w-full text-left border-collapse text-xs">
+                        <thead>
+                            <tr class="bg-slate-50/80 text-slate-500 border-b border-slate-200/80">
+                                <th class="p-4 font-semibold">客戶名稱</th>
+                                <th class="p-4 font-semibold">專案合約</th>
+                                <th class="p-4 font-semibold text-right">合約總額</th>
+                                <th class="p-4 font-semibold text-right">已收金額</th>
+                                <th class="p-4 font-semibold text-right">未收尾款</th>
+                                <th class="p-4 font-semibold">付款狀態</th>
+                                <th class="p-4 font-semibold">備註</th>
+                                <th class="p-4 font-semibold text-center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="receivable-table-body" class="divide-y divide-slate-100"></tbody>
+                    </table>
+                </div>
+            </section>
+
+        </div>
+    </main>
+
+    <!-- 通用互動式表單 Modal -->
+    <div id="app-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 border border-slate-200 transform transition-all max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4 pb-3 border-b border-slate-100">
+                <h3 id="modal-title" class="font-bold text-slate-900 text-sm">表單標題</h3>
+                <button onclick="closeModal()" class="text-slate-400 hover:text-slate-700 text-sm font-bold px-2 py-1"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="modal-form" onsubmit="handleFormSubmit(event)" class="space-y-4 text-xs">
+                <input type="hidden" id="form-type" value="">
+                <input type="hidden" id="editing-id" value="">
+                <div id="modal-dynamic-fields" class="space-y-3"></div>
+                <div id="modal-actions-container" class="flex justify-end space-x-2 pt-3 border-t border-slate-100">
+                    <button type="button" onclick="closeModal()" class="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium">取消</button>
+                    <button type="submit" id="modal-submit-btn" class="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-semibold shadow-sm">儲存變更</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 訊息提示 Toast -->
+    <div id="toast" class="fixed bottom-6 right-6 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl text-xs z-50 flex items-center space-x-3 transition-all duration-300 transform translate-y-20 opacity-0">
+        <i class="fa-solid fa-circle-check text-emerald-400"></i>
+        <span id="toast-message">操作成功</span>
+    </div>
+
+    <!-- JavaScript 應用邏輯 -->
+    <script>
+        if (!window.appData) {
+            window.appData = {
+                selfDeduct: [],
+                expense: [],
+                inflow: [],
+                receivable: []
+            };
+        }
+
+        let activeTab = 'dashboard';
+        let currentFilterMode = 'currentMonth';
+        let mainChartInstance = null;
+        let pieChartInstance = null;
+
+        // 登入驗證 Helper
+        function checkAuthOrPrompt() {
+            if (!window.currentUser) {
+                showToast('🔒 請先登入 Google 帳號才可執行此操作！');
+                return false;
+            }
+            return true;
+        }
+
+        function getAuthLockHTML() {
+            return `
+                <tr>
+                    <td colspan="10" class="p-8 text-center bg-slate-50/50">
+                        <div class="flex flex-col items-center justify-center space-y-3">
+                            <div class="w-12 h-12 bg-amber-50 text-amber-500 rounded-full flex items-center justify-center text-lg shadow-sm border border-amber-100">
+                                <i class="fa-solid fa-lock"></i>
+                            </div>
+                            <div class="text-sm font-bold text-slate-700">受保護的營運資料</div>
+                            <p class="text-xs text-slate-500 max-w-xs">請先於左下角點擊「Google 帳號登入」，即可檢視與管理財務明細與紀錄。</p>
+                            <button onclick="handleGoogleLogin()" class="mt-2 bg-brand-600 hover:bg-brand-500 text-white px-4 py-2 rounded-xl text-xs font-semibold shadow-sm transition flex items-center space-x-2">
+                                <i class="fa-brands fa-google"></i>
+                                <span>立即登入 Google 帳號</span>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }
+
+        function switchTab(tabId) {
+            activeTab = tabId;
+            const tabs = ['dashboard', 'selfDeduct', 'expense', 'inflow', 'receivable'];
+            const titleMap = {
+                dashboard: '營運總覽',
+                selfDeduct: '自負額管理',
+                expense: '支出管理',
+                inflow: '進帳與營收管理',
+                receivable: '客戶收款與應收帳款管理'
+            };
+
+            tabs.forEach(id => {
+                const sec = document.getElementById(`tab-${id}`);
+                const navBtn = document.getElementById(`nav-${id}`);
+                if (sec) sec.classList.toggle('hidden', id !== tabId);
+                if (navBtn) {
+                    if (id === tabId) {
+                        navBtn.className = "w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition duration-200 text-left bg-brand-600 text-white shadow-md shadow-brand-500/20 font-semibold";
+                        navBtn.querySelector('i')?.classList.remove('opacity-70');
+                    } else {
+                        navBtn.className = "w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition duration-200 text-left text-slate-400 hover:bg-slate-800/60 hover:text-white font-medium";
+                        navBtn.querySelector('i')?.classList.add('opacity-70');
+                    }
+                }
+            });
+
+            const pageTitle = document.getElementById('current-page-title');
+            if (pageTitle) pageTitle.innerText = titleMap[tabId] || '營運管理系統';
+
+            refreshCurrentView();
+        }
+        window.switchTab = switchTab;
+
+        function refreshCurrentView() {
+            renderSelfDeduct();
+            renderExpense();
+            renderInflow();
+            renderReceivable();
+            updateDashboardKPIs();
+            renderCharts();
+        }
+        window.refreshCurrentView = refreshCurrentView;
+
+        function renderSelfDeduct() {
+            const tbody = document.getElementById('selfDeduct-table-body');
+            if (!tbody) return;
+            tbody.innerHTML = '';
+
+            if (!window.currentUser) {
+                tbody.innerHTML = getAuthLockHTML();
+                return;
+            }
+
+            if (appData.selfDeduct.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" class="p-8 text-center text-slate-400">目前尚無自負額紀錄</td></tr>`;
+                return;
+            }
+
+            appData.selfDeduct.forEach((item, index) => {
+                const itemId = item.id || String(index);
+                const statusVal = item.status || '處理中';
+                tbody.innerHTML += `
+                    <tr class="hover:bg-slate-50/80 transition">
+                        <td class="p-4 font-medium text-slate-700">${item.date || ''}</td>
+                        <td class="p-4 font-bold text-slate-900">${item.project || ''}</td>
+                        <td class="p-4 text-slate-600">${item.owner || ''}</td>
+                        <td class="p-4 text-right font-extrabold text-amber-600">NT$ ${Number(item.amount || 0).toLocaleString()}</td>
+                        <td class="p-4">
+                            <select onchange="updateItemStatus('selfDeduct', '${itemId}', this.value)" class="text-xs font-semibold px-2.5 py-1 rounded-full border cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-500/20 ${statusVal === '已結算' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-amber-50 text-amber-600 border-amber-200'}">
+                                <option value="處理中" ${statusVal === '處理中' ? 'selected' : ''}>處理中</option>
+                                <option value="已結算" ${statusVal === '已結算' ? 'selected' : ''}>已結算</option>
+                            </select>
+                        </td>
+                        <td class="p-4 text-slate-500 max-w-[150px] truncate" title="${item.note || ''}">${item.note || '-'}</td>
+                        <td class="p-4 text-center space-x-1">
+                            <button onclick="editItem('selfDeduct', '${itemId}')" class="text-slate-400 hover:text-brand-600 p-1.5 rounded-lg hover:bg-brand-50 transition" title="編輯"><i class="fa-solid fa-pen-to-square"></i></button>
+                            <button onclick="deleteItem('selfDeduct', '${itemId}')" class="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition" title="刪除"><i class="fa-solid fa-trash-can"></i></button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        function renderExpense() {
+            const tbody = document.getElementById('expense-table-body');
+            if (!tbody) return;
+            tbody.innerHTML = '';
+
+            if (!window.currentUser) {
+                tbody.innerHTML = getAuthLockHTML();
+                return;
+            }
+
+            if (appData.expense.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" class="p-8 text-center text-slate-400">目前尚無支出紀錄</td></tr>`;
+                return;
+            }
+
+            appData.expense.forEach((item, index) => {
+                const itemId = item.id || String(index);
+                tbody.innerHTML += `
+                    <tr class="hover:bg-slate-50/80 transition">
+                        <td class="p-4 font-medium text-slate-700">${item.date || ''}</td>
+                        <td class="p-4 font-bold text-slate-900">${item.title || ''}</td>
+                        <td class="p-4 text-slate-600">${item.category || ''}</td>
+                        <td class="p-4 text-right font-extrabold text-rose-600">NT$ ${Number(item.amount || 0).toLocaleString()}</td>
+                        <td class="p-4 text-slate-600">${item.payment || ''}</td>
+                        <td class="p-4 text-slate-500 max-w-[150px] truncate" title="${item.note || ''}">${item.note || '-'}</td>
+                        <td class="p-4 text-center space-x-1">
+                            <button onclick="editItem('expense', '${itemId}')" class="text-slate-400 hover:text-brand-600 p-1.5 rounded-lg hover:bg-brand-50 transition" title="編輯"><i class="fa-solid fa-pen-to-square"></i></button>
+                            <button onclick="deleteItem('expense', '${itemId}')" class="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition" title="刪除"><i class="fa-solid fa-trash-can"></i></button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        function renderInflow() {
+            const tbody = document.getElementById('inflow-table-body');
+            if (!tbody) return;
+            tbody.innerHTML = '';
+
+            if (!window.currentUser) {
+                tbody.innerHTML = getAuthLockHTML();
+                return;
+            }
+
+            if (appData.inflow.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-slate-400">目前尚無進帳紀錄</td></tr>`;
+                return;
+            }
+
+            appData.inflow.forEach((item, index) => {
+                const itemId = item.id || String(index);
+                tbody.innerHTML += `
+                    <tr class="hover:bg-slate-50/80 transition">
+                        <td class="p-4 font-medium text-slate-700">${item.date || ''}</td>
+                        <td class="p-4 font-bold text-slate-900">${item.client || ''}</td>
+                        <td class="p-4 text-slate-600">${item.category || ''}</td>
+                        <td class="p-4 text-right font-extrabold text-emerald-600">NT$ ${Number(item.amount || 0).toLocaleString()}</td>
+                        <td class="p-4 text-slate-600">${item.account || item.payment || ''}</td>
+                        <td class="p-4 text-slate-600 font-mono">${item.lastFive ? item.lastFive : '-'}</td>
+                        <td class="p-4 text-slate-500 max-w-[150px] truncate" title="${item.note || ''}">${item.note || '-'}</td>
+                        <td class="p-4 text-center space-x-1">
+                            <button onclick="editItem('inflow', '${itemId}')" class="text-slate-400 hover:text-brand-600 p-1.5 rounded-lg hover:bg-brand-50 transition" title="編輯"><i class="fa-solid fa-pen-to-square"></i></button>
+                            <button onclick="deleteItem('inflow', '${itemId}')" class="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition" title="刪除"><i class="fa-solid fa-trash-can"></i></button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        function renderReceivable() {
+            const tbody = document.getElementById('receivable-table-body');
+            if (!tbody) return;
+            tbody.innerHTML = '';
+
+            if (!window.currentUser) {
+                tbody.innerHTML = getAuthLockHTML();
+                return;
+            }
+
+            if (appData.receivable.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-slate-400">目前尚無應收款紀錄</td></tr>`;
+                return;
+            }
+
+            appData.receivable.forEach((item, index) => {
+                const itemId = item.id || String(index);
+                const total = Number(item.total || 0);
+                const paid = Number(item.paid || 0);
+                const balance = total - paid;
+                const statusVal = item.status || '未收款';
+                
+                let selectClass = 'bg-amber-50 text-amber-600 border-amber-200';
+                if (statusVal === '已收齊') {
+                    selectClass = 'bg-emerald-50 text-emerald-600 border-emerald-200';
+                } else if (statusVal === '未收款') {
+                    selectClass = 'bg-rose-50 text-rose-600 border-rose-200';
+                }
+
+                tbody.innerHTML += `
+                    <tr class="hover:bg-slate-50/80 transition">
+                        <td class="p-4 font-bold text-slate-900">${item.client || ''}</td>
+                        <td class="p-4 text-slate-700">${item.project || ''}</td>
+                        <td class="p-4 text-right font-bold text-slate-800">NT$ ${total.toLocaleString()}</td>
+                        <td class="p-4 text-right font-bold text-emerald-600">NT$ ${paid.toLocaleString()}</td>
+                        <td class="p-4 text-right font-extrabold text-rose-600">NT$ ${balance.toLocaleString()}</td>
+                        <td class="p-4">
+                            <select onchange="updateItemStatus('receivable', '${itemId}', this.value)" class="text-xs font-semibold px-2.5 py-1 rounded-full border cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-500/20 ${selectClass}">
+                                <option value="未收款" ${statusVal === '未收款' ? 'selected' : ''}>未收款</option>
+                                <option value="部分收款" ${statusVal === '部分收款' ? 'selected' : ''}>部分收款</option>
+                                <option value="已收齊" ${statusVal === '已收齊' ? 'selected' : ''}>已收齊</option>
+                            </select>
+                        </td>
+                        <td class="p-4 text-slate-500 max-w-[150px] truncate" title="${item.note || ''}">${item.note || '-'}</td>
+                        <td class="p-4 text-center space-x-1">
+                            <button onclick="editItem('receivable', '${itemId}')" class="text-slate-400 hover:text-brand-600 p-1.5 rounded-lg hover:bg-brand-50 transition" title="編輯"><i class="fa-solid fa-pen-to-square"></i></button>
+                            <button onclick="deleteItem('receivable', '${itemId}')" class="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition" title="刪除"><i class="fa-solid fa-trash-can"></i></button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        // --- Dynamic Modal Form Generation & Edit System ---
+        function openModal(type, itemId = null) {
+            if (!checkAuthOrPrompt()) return;
+
+            const modal = document.getElementById('app-modal');
+            const modalTitle = document.getElementById('modal-title');
+            const formType = document.getElementById('form-type');
+            const editingId = document.getElementById('editing-id');
+            const fieldsContainer = document.getElementById('modal-dynamic-fields');
+
+            formType.value = type;
+            editingId.value = itemId || '';
+
+            let existingItem = null;
+            if (itemId && appData[type]) {
+                existingItem = appData[type].find((it, idx) => (it.id ? String(it.id) === String(itemId) : String(idx) === String(itemId)));
+            }
+
+            const todayStr = new Date().toISOString().split('T')[0];
+
+            if (type === 'selfDeduct') {
+                modalTitle.innerText = existingItem ? '編輯自負額紀錄' : '新增自負額紀錄';
+                const currentOwner = existingItem?.owner || '妮';
+                const isOtherOwner = !['妮', '浩'].includes(currentOwner);
+
+                fieldsContainer.innerHTML = `
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">日期</label>
+                        <input type="date" id="field-date" value="${existingItem?.date || todayStr}" required class="w-full border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-brand-500/20">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">項目名稱</label>
+                        <input type="text" id="field-project" value="${existingItem?.project || ''}" placeholder="例：品牌行銷專案" required class="w-full border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-brand-500/20">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">付款人</label>
+                        <select id="field-owner-select" onchange="togglePayerOtherInput(this.value)" class="w-full border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-brand-500/20">
+                            <option value="妮" ${currentOwner === '妮' ? 'selected' : ''}>妮</option>
+                            <option value="浩" ${currentOwner === '浩' ? 'selected' : ''}>浩</option>
+                            <option value="其他" ${isOtherOwner ? 'selected' : ''}>其他</option>
+                        </select>
+                    </div>
+                    <div id="self-deduct-payer-other-container" class="${isOtherOwner ? '' : 'hidden'}">
+                        <label class="block font-medium text-slate-700 mb-1">填寫其他付款人</label>
+                        <input type="text" id="field-owner-other" value="${isOtherOwner ? currentOwner : ''}" placeholder="請輸入姓名" class="w-full border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-brand-500/20">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">自負額金額 (NT$)</label>
+                        <input type="number" id="field-amount" value="${existingItem?.amount || ''}" placeholder="0" required class="w-full border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-brand-500/20">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">結算狀態</label>
+                        <select id="field-status" class="w-full border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-brand-500/20">
+                            <option value="處理中" ${(existingItem?.status || '處理中') === '處理中' ? 'selected' : ''}>處理中</option>
+                            <option value="已結算" ${existingItem?.status === '已結算' ? 'selected' : ''}>已結算</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">備註</label>
+                        <textarea id="field-note" placeholder="詳細說明..." class="w-full border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-brand-500/20 h-20">${existingItem?.note || ''}</textarea>
+                    </div>
+                `;
+            } else if (type === 'expense') {
+                modalTitle.innerText = existingItem ? '編輯支出紀錄' : '新增支出紀錄';
+                const curCat = existingItem?.category || '廣告行銷';
+                const isCatOther = curCat.startsWith('其他雜支');
+                
+                const curPayment = existingItem?.payment || '轉帳 (玉山銀行)';
+                let payType = '轉帳';
+                let bankType = '玉山銀行';
+                let bankOtherVal = '';
+                let payOtherVal = '';
+
+                if (curPayment.startsWith('轉帳')) {
+                    payType = '轉帳';
+                    const match = curPayment.match(/轉帳 \((.+)\)/);
+                    if (match) {
+                        const bName = match[1];
+                        if (['玉山銀行', '國泰世華', '台新銀行', '中國信託', '富邦銀行'].includes(bName)) {
+                            bankType = bName;
+                        } else {
+                            bankType = '其他';
+                            bankOtherVal = bName;
+                        }
+                    }
+                } else if (curPayment.startsWith('刷卡')) {
+                    payType = '刷卡';
+                    const match = curPayment.match(/刷卡 \((.+)\)/);
+                    if (match) {
+                        const bName = match[1];
+                        if (['玉山銀行', '國泰世華', '台新銀行', '中國信託', '富邦銀行'].includes(bName)) {
+                            bankType = bName;
+                        } else {
+                            bankType = '其他';
+                            bankOtherVal = bName;
+                        }
+                    }
+                } else if (curPayment === '現金') {
+                    payType = '現金';
+                } else {
+                    payType = '其他';
+                    payOtherVal = curPayment.startsWith('其他 (') ? curPayment.replace('其他 (', '').replace(')', '') : curPayment;
+                }
+
+                fieldsContainer.innerHTML = `
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">日期</label>
+                        <input type="date" id="field-date" value="${existingItem?.date || todayStr}" required class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">支出項目 / 說明</label>
+                        <input type="text" id="field-title" value="${existingItem?.title || ''}" placeholder="例：FB廣告託管費" required class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">支出類別</label>
+                        <select id="field-category" onchange="toggleExpenseCategoryOther(this.value)" class="w-full border border-slate-200 rounded-xl p-2.5">
+                            <option value="廣告行銷" ${curCat === '廣告行銷' ? 'selected' : ''}>廣告行銷</option>
+                            <option value="軟體訂閱" ${curCat === '軟體訂閱' ? 'selected' : ''}>軟體訂閱</option>
+                            <option value="外包接案" ${curCat === '外包接案' ? 'selected' : ''}>外包接案</option>
+                            <option value="薪資獎金" ${curCat === '薪資獎金' ? 'selected' : ''}>薪資獎金</option>
+                            <option value="其他雜支" ${isCatOther ? 'selected' : ''}>其他雜支</option>
+                        </select>
+                    </div>
+                    <div id="expense-category-other-container" class="${isCatOther ? '' : 'hidden'}">
+                        <label class="block font-medium text-slate-700 mb-1">自訂雜支類別</label>
+                        <input type="text" id="field-category-other" value="${isCatOther ? curCat.replace('其他雜支 (', '').replace(')', '') : ''}" placeholder="說明類別" class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">金額 (NT$)</label>
+                        <input type="number" id="field-amount" value="${existingItem?.amount || ''}" placeholder="0" required class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">付款方式</label>
+                        <select id="field-payment-type" onchange="toggleExpensePaymentType(this.value)" class="w-full border border-slate-200 rounded-xl p-2.5">
+                            <option value="轉帳" ${payType === '轉帳' ? 'selected' : ''}>轉帳</option>
+                            <option value="現金" ${payType === '現金' ? 'selected' : ''}>現金</option>
+                            <option value="刷卡" ${payType === '刷卡' ? 'selected' : ''}>刷卡</option>
+                            <option value="其他" ${payType === '其他' ? 'selected' : ''}>其他</option>
+                        </select>
+                    </div>
+                    <div id="expense-bank-container" class="${['轉帳', '刷卡'].includes(payType) ? '' : 'hidden'}">
+                        <label class="block font-medium text-slate-700 mb-1">選擇銀行</label>
+                        <select id="field-payment-bank" onchange="toggleExpenseBankOther(this.value)" class="w-full border border-slate-200 rounded-xl p-2.5">
+                            <option value="玉山銀行" ${bankType === '玉山銀行' ? 'selected' : ''}>玉山銀行</option>
+                            <option value="國泰世華" ${bankType === '國泰世華' ? 'selected' : ''}>國泰世華</option>
+                            <option value="台新銀行" ${bankType === '台新銀行' ? 'selected' : ''}>台新銀行</option>
+                            <option value="中國信託" ${bankType === '中國信託' ? 'selected' : ''}>中國信託</option>
+                            <option value="富邦銀行" ${bankType === '富邦銀行' ? 'selected' : ''}>富邦銀行</option>
+                            <option value="其他" ${bankType === '其他' ? 'selected' : ''}>其他</option>
+                        </select>
+                    </div>
+                    <div id="expense-bank-other-container" class="${['轉帳', '刷卡'].includes(payType) && bankType === '其他' ? '' : 'hidden'}">
+                        <label class="block font-medium text-slate-700 mb-1">填寫其他銀行名稱</label>
+                        <input type="text" id="field-payment-bank-other" value="${bankOtherVal}" placeholder="例：台灣銀行" class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div id="expense-payment-other-container" class="${payType === '其他' ? '' : 'hidden'}">
+                        <label class="block font-medium text-slate-700 mb-1">填寫其他付款方式</label>
+                        <input type="text" id="field-payment-other" value="${payOtherVal}" placeholder="例：LINE Pay / 街口支付 / 禮券" class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">備註</label>
+                        <textarea id="field-note" placeholder="備註或單據編號..." class="w-full border border-slate-200 rounded-xl p-2.5 h-20">${existingItem?.note || ''}</textarea>
+                    </div>
+                `;
+            } else if (type === 'inflow') {
+                modalTitle.innerText = existingItem ? '編輯進帳紀錄' : '新增進帳紀錄';
+                const curCat = existingItem?.category || '社群代操';
+                
+                const defaultCategories = [
+                    '社群代操',
+                    '廣告投放託管',
+                    '品牌重塑／視覺設計',
+                    'SEO 關鍵字優化',
+                    '網站建置／網頁開發',
+                    '網紅行銷／KOL 媒合',
+                    '影音拍攝／節目企劃',
+                    '數位行銷顧問',
+                    '專案尾款／結案款'
+                ];
+                
+                const isCatOther = !defaultCategories.includes(curCat) && curCat !== '';
+                const otherVal = isCatOther ? curCat.replace('其他 (', '').replace(')', '') : '';
+
+                const curAccount = existingItem?.account || existingItem?.payment || '匯款 (玉山銀行)';
+                let payType = '匯款';
+                let bankType = '玉山銀行';
+                let bankOtherVal = '';
+                let payOtherVal = '';
+
+                if (curAccount.startsWith('匯款')) {
+                    payType = '匯款';
+                    const match = curAccount.match(/匯款 \((.+)\)/);
+                    if (match) {
+                        const bName = match[1];
+                        if (['玉山銀行', '國泰世華', '台新銀行', '中國信託', '富邦銀行'].includes(bName)) {
+                            bankType = bName;
+                        } else {
+                            bankType = '其他';
+                            bankOtherVal = bName;
+                        }
+                    }
+                } else if (curAccount === '現金') {
+                    payType = '現金';
+                } else {
+                    payType = '其他';
+                    payOtherVal = curAccount.startsWith('其他 (') ? curAccount.replace('其他 (', '').replace(')', '') : curAccount;
+                }
+
+                fieldsContainer.innerHTML = `
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">日期</label>
+                        <input type="date" id="field-date" value="${existingItem?.date || todayStr}" required class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">客戶 / 專案名稱</label>
+                        <input type="text" id="field-client" value="${existingItem?.client || ''}" placeholder="例：ABC 科技" required class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">性質分類</label>
+                        <select id="field-category-select" onchange="toggleInflowCategoryOther(this.value)" class="w-full border border-slate-200 rounded-xl p-2.5">
+                            <option value="社群代操" ${curCat === '社群代操' ? 'selected' : ''}>社群代操</option>
+                            <option value="廣告投放託管" ${curCat === '廣告投放託管' ? 'selected' : ''}>廣告投放託管</option>
+                            <option value="品牌重塑／視覺設計" ${curCat === '品牌重塑／視覺設計' ? 'selected' : ''}>品牌重塑／視覺設計</option>
+                            <option value="SEO 關鍵字優化" ${curCat === 'SEO 關鍵字優化' ? 'selected' : ''}>SEO 關鍵字優化</option>
+                            <option value="網站建置／網頁開發" ${curCat === '網站建置／網頁開發' ? 'selected' : ''}>網站建置／網頁開發</option>
+                            <option value="網紅行銷／KOL 媒合" ${curCat === '網紅行銷／KOL 媒合' ? 'selected' : ''}>網紅行銷／KOL 媒合</option>
+                            <option value="影音拍攝／節目企劃" ${curCat === '影音拍攝／節目企劃' ? 'selected' : ''}>影音拍攝／節目企劃</option>
+                            <option value="數位行銷顧問" ${curCat === '數位行銷顧問' ? 'selected' : ''}>數位行銷顧問</option>
+                            <option value="專案尾款／結案款" ${curCat === '專案尾款／結案款' ? 'selected' : ''}>專案尾款／結案款</option>
+                            <option value="其他" ${isCatOther ? 'selected' : ''}>其他 (自行填寫)</option>
+                        </select>
+                    </div>
+                    <div id="inflow-category-other-container" class="${isCatOther ? '' : 'hidden'}">
+                        <label class="block font-medium text-slate-700 mb-1">填寫其他性質</label>
+                        <input type="text" id="field-category-other" value="${otherVal}" placeholder="請輸入性質名稱" class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">進帳金額 (NT$)</label>
+                        <input type="number" id="field-amount" value="${existingItem?.amount || ''}" placeholder="0" required class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">付款方式 / 帳戶</label>
+                        <select id="field-inflow-payment-type" onchange="toggleInflowPaymentType(this.value)" class="w-full border border-slate-200 rounded-xl p-2.5">
+                            <option value="匯款" ${payType === '匯款' ? 'selected' : ''}>匯款</option>
+                            <option value="現金" ${payType === '現金' ? 'selected' : ''}>現金</option>
+                            <option value="其他" ${payType === '其他' ? 'selected' : ''}>其他</option>
+                        </select>
+                    </div>
+                    <div id="inflow-bank-container" class="${payType === '匯款' ? '' : 'hidden'}">
+                        <label class="block font-medium text-slate-700 mb-1">選擇收款銀行 / 帳戶</label>
+                        <select id="field-inflow-bank" onchange="toggleInflowBankOther(this.value)" class="w-full border border-slate-200 rounded-xl p-2.5">
+                            <option value="玉山銀行" ${bankType === '玉山銀行' ? 'selected' : ''}>玉山銀行</option>
+                            <option value="國泰世華" ${bankType === '國泰世華' ? 'selected' : ''}>國泰世華</option>
+                            <option value="台新銀行" ${bankType === '台新銀行' ? 'selected' : ''}>台新銀行</option>
+                            <option value="中國信託" ${bankType === '中國信託' ? 'selected' : ''}>中國信託</option>
+                            <option value="富邦銀行" ${bankType === '富邦銀行' ? 'selected' : ''}>富邦銀行</option>
+                            <option value="其他" ${bankType === '其他' ? 'selected' : ''}>其他</option>
+                        </select>
+                    </div>
+                    <div id="inflow-bank-other-container" class="${payType === '匯款' && bankType === '其他' ? '' : 'hidden'}">
+                        <label class="block font-medium text-slate-700 mb-1">填寫其他銀行名稱</label>
+                        <input type="text" id="field-inflow-bank-other" value="${bankOtherVal}" placeholder="例：台灣銀行" class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div id="inflow-payment-other-container" class="${payType === '其他' ? '' : 'hidden'}">
+                        <label class="block font-medium text-slate-700 mb-1">填寫其他付款方式</label>
+                        <input type="text" id="field-inflow-payment-other" value="${payOtherVal}" placeholder="例：支票 / LINE Pay / 禮券" class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div id="inflow-last-five-container" class="${payType === '匯款' ? '' : 'hidden'}">
+                        <label class="block font-medium text-slate-700 mb-1">帳號後五碼</label>
+                        <input type="text" id="field-lastFive" value="${existingItem?.lastFive || ''}" placeholder="例：12345" class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">備註</label>
+                        <textarea id="field-note" placeholder="備註..." class="w-full border border-slate-200 rounded-xl p-2.5 h-20">${existingItem?.note || ''}</textarea>
+                    </div>
+                `;
+            } else if (type === 'receivable') {
+                modalTitle.innerText = existingItem ? '編輯客戶應收款項' : '新增客戶應收款項';
+                fieldsContainer.innerHTML = `
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">客戶名稱</label>
+                        <input type="text" id="field-client" value="${existingItem?.client || ''}" placeholder="例：ABC 品牌" required class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">專案合約名稱</label>
+                        <input type="text" id="field-project" value="${existingItem?.project || ''}" placeholder="例：年度行銷策略" required class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">合約總額 (NT$)</label>
+                        <input type="number" id="field-total" value="${existingItem?.total || ''}" placeholder="0" required class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">已收金額 (NT$)</label>
+                        <input type="number" id="field-paid" value="${existingItem?.paid || '0'}" placeholder="0" required class="w-full border border-slate-200 rounded-xl p-2.5">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">狀態</label>
+                        <select id="field-status" class="w-full border border-slate-200 rounded-xl p-2.5">
+                            <option value="未收款" ${(existingItem?.status || '未收款') === '未收款' ? 'selected' : ''}>未收款</option>
+                            <option value="部分收款" ${existingItem?.status === '部分收款' ? 'selected' : ''}>部分收款</option>
+                            <option value="已收齊" ${existingItem?.status === '已收齊' ? 'selected' : ''}>已收齊</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-700 mb-1">備註</label>
+                        <textarea id="field-note" placeholder="收費期程與細節..." class="w-full border border-slate-200 rounded-xl p-2.5 h-20">${existingItem?.note || ''}</textarea>
+                    </div>
+                `;
+            }
+
+            modal.classList.remove('hidden');
+        }
+        window.openModal = openModal;
+
+        function editItem(type, itemId) {
+            openModal(type, itemId);
+        }
+        window.editItem = editItem;
+
+        async function handleFormSubmit(event) {
+            event.preventDefault();
+            if (!checkAuthOrPrompt()) return;
+
+            const type = document.getElementById('form-type').value;
+            const itemId = document.getElementById('editing-id').value;
+
+            let newData = {};
+
+            if (type === 'selfDeduct') {
+                const ownerSel = document.getElementById('field-owner-select')?.value;
+                const ownerOther = document.getElementById('field-owner-other')?.value;
+                const finalOwner = ownerSel === '其他' ? (ownerOther || '其他') : ownerSel;
+
+                newData = {
+                    date: document.getElementById('field-date')?.value || '',
+                    project: document.getElementById('field-project')?.value || '',
+                    owner: finalOwner,
+                    amount: Number(document.getElementById('field-amount')?.value || 0),
+                    status: document.getElementById('field-status')?.value || '處理中',
+                    note: document.getElementById('field-note')?.value || ''
+                };
+            } else if (type === 'expense') {
+                const catSel = document.getElementById('field-category')?.value;
+                const catOther = document.getElementById('field-category-other')?.value;
+                const finalCat = catSel === '其他雜支' ? `其他雜支 (${catOther || ''})` : catSel;
+
+                const payType = document.getElementById('field-payment-type')?.value || '轉帳';
+                let finalPayment = payType;
+
+                if (payType === '轉帳' || payType === '刷卡') {
+                    const bankSel = document.getElementById('field-payment-bank')?.value;
+                    const bankOther = document.getElementById('field-payment-bank-other')?.value;
+                    const finalBank = bankSel === '其他' ? (bankOther || '其他銀行') : bankSel;
+                    finalPayment = `${payType} (${finalBank})`;
+                } else if (payType === '其他') {
+                    const payOther = document.getElementById('field-payment-other')?.value;
+                    finalPayment = payOther ? `其他 (${payOther})` : '其他';
+                }
+
+                newData = {
+                    date: document.getElementById('field-date')?.value || '',
+                    title: document.getElementById('field-title')?.value || '',
+                    category: finalCat,
+                    amount: Number(document.getElementById('field-amount')?.value || 0),
+                    payment: finalPayment,
+                    note: document.getElementById('field-note')?.value || ''
+                };
+            } else if (type === 'inflow') {
+                const catSel = document.getElementById('field-category-select')?.value;
+                const catOther = document.getElementById('field-category-other')?.value;
+                const finalCat = catSel === '其他' ? (catOther ? `其他 (${catOther})` : '其他') : catSel;
+
+                const payType = document.getElementById('field-inflow-payment-type')?.value || '匯款';
+                let finalAccount = payType;
+
+                if (payType === '匯款') {
+                    const bankSel = document.getElementById('field-inflow-bank')?.value;
+                    const bankOther = document.getElementById('field-inflow-bank-other')?.value;
+                    const finalBank = bankSel === '其他' ? (bankOther || '其他銀行') : bankSel;
+                    finalAccount = `匯款 (${finalBank})`;
+                } else if (payType === '其他') {
+                    const payOther = document.getElementById('field-inflow-payment-other')?.value;
+                    finalAccount = payOther ? `其他 (${payOther})` : '其他';
+                }
+
+                newData = {
+                    date: document.getElementById('field-date')?.value || '',
+                    client: document.getElementById('field-client')?.value || '',
+                    category: finalCat,
+                    amount: Number(document.getElementById('field-amount')?.value || 0),
+                    account: finalAccount,
+                    lastFive: document.getElementById('field-lastFive')?.value || '',
+                    note: document.getElementById('field-note')?.value || ''
+                };
+            } else if (type === 'receivable') {
+                newData = {
+                    client: document.getElementById('field-client')?.value || '',
+                    project: document.getElementById('field-project')?.value || '',
+                    total: Number(document.getElementById('field-total')?.value || 0),
+                    paid: Number(document.getElementById('field-paid')?.value || 0),
+                    status: document.getElementById('field-status')?.value || '未收款',
+                    note: document.getElementById('field-note')?.value || ''
+                };
+            }
+
+            try {
+                if (itemId) {
+                    const list = appData[type];
+                    const idx = list.findIndex((it, i) => (it.id ? String(it.id) === String(itemId) : String(i) === String(itemId)));
+                    if (idx !== -1) {
+                        appData[type][idx] = { ...appData[type][idx], ...newData };
+                        if (window.isFirebaseConnected && typeof window.fbUpdateRecord === 'function' && typeof itemId === 'string' && itemId.length > 5 && isNaN(Number(itemId))) {
+                            await window.fbUpdateRecord(type, itemId, newData);
+                        }
+                    }
+                    showToast('已成功修改紀錄');
+                } else {
+                    const newId = String(Date.now());
+                    const recordWithId = { id: newId, ...newData };
+                    appData[type].unshift(recordWithId);
+
+                    if (window.isFirebaseConnected && typeof window.fbAddRecord === 'function') {
+                        await window.fbAddRecord(type, newData);
+                    }
+                    showToast('已成功新增紀錄');
+                }
+            } catch (err) {
+                console.error("儲存失敗：", err);
+                showToast('儲存失敗：' + err.message);
+            }
+
+            closeModal();
+            refreshCurrentView();
+        }
+        window.handleFormSubmit = handleFormSubmit;
+
+        function getFilteredData() {
+            if (!window.currentUser) {
+                return { selfDeduct: [], expense: [], inflow: [], receivable: [] };
+            }
+
+            const year = document.getElementById('filter-year-select')?.value || '2026';
+            const month = document.getElementById('filter-month-select')?.value || '10';
+
+            const filterByDate = (items) => {
+                if (currentFilterMode === 'all') return items;
+                return items.filter(item => {
+                    if (!item.date) return true;
+                    const parts = item.date.split('-');
+                    if (parts.length < 2) return true;
+                    if (month === 'all-months') {
+                        return parts[0] === year;
+                    }
+                    return parts[0] === year && parts[1] === month.padStart(2, '0');
+                });
+            };
+
+            return {
+                selfDeduct: filterByDate(appData.selfDeduct),
+                expense: filterByDate(appData.expense),
+                inflow: filterByDate(appData.inflow),
+                receivable: appData.receivable
+            };
+        }
+
+        function updateDashboardKPIs() {
+            const filtered = getFilteredData();
+
+            const totalInflow = filtered.inflow.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+            const totalExpense = filtered.expense.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+            const totalSelfDeduct = filtered.selfDeduct.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+            const totalReceivable = filtered.receivable.reduce((sum, item) => sum + (Number(item.total || 0) - Number(item.paid || 0)), 0);
+            const netProfit = totalInflow - totalExpense - totalSelfDeduct;
+
+            document.getElementById('kpi-op-revenue').innerText = `NT$ ${totalInflow.toLocaleString()}`;
+            document.getElementById('kpi-actual-inflow').innerText = `NT$ ${totalInflow.toLocaleString()}`;
+            document.getElementById('kpi-total-expense').innerText = `NT$ ${totalExpense.toLocaleString()}`;
+            document.getElementById('kpi-total-selfDeduct').innerText = `NT$ ${totalSelfDeduct.toLocaleString()}`;
+            document.getElementById('kpi-total-receivable').innerText = `NT$ ${totalReceivable.toLocaleString()}`;
+            document.getElementById('kpi-net-profit').innerText = `NT$ ${netProfit.toLocaleString()}`;
+
+            const year = document.getElementById('filter-year-select')?.value || '2026';
+            const month = document.getElementById('filter-month-select')?.value || '10';
+            const rangeLabel = document.getElementById('filter-date-range-label');
+            if (rangeLabel) {
+                if (!window.currentUser) {
+                    rangeLabel.innerText = '目前檢視區間：未登入 (暫無數據)';
+                } else if (currentFilterMode === 'all') {
+                    rangeLabel.innerText = '目前檢視區間：全部歷史紀錄';
+                } else if (month === 'all-months') {
+                    rangeLabel.innerText = `目前檢視區間：${year} 年全年`;
+                } else {
+                    rangeLabel.innerText = `目前檢視區間：${year} 年 ${month} 月`;
+                }
+            }
+        }
+
+        function renderCharts() {
+            const filtered = getFilteredData();
+
+            // Main Trend Chart
+            const mainCtx = document.getElementById('mainTrendChart')?.getContext('2d');
+            if (mainCtx) {
+                if (mainChartInstance) mainChartInstance.destroy();
+                mainChartInstance = new Chart(mainCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: ['實際進帳', '總支出', '自負額', '淨利結餘'],
+                        datasets: [{
+                            label: '金額 (NT$)',
+                            data: [
+                                filtered.inflow.reduce((s, i) => s + Number(i.amount || 0), 0),
+                                filtered.expense.reduce((s, i) => s + Number(i.amount || 0), 0),
+                                filtered.selfDeduct.reduce((s, i) => s + Number(i.amount || 0), 0),
+                                filtered.inflow.reduce((s, i) => s + Number(i.amount || 0), 0) - filtered.expense.reduce((s, i) => s + Number(i.amount || 0), 0) - filtered.selfDeduct.reduce((s, i) => s + Number(i.amount || 0), 0)
+                            ],
+                            backgroundColor: ['#10b981', '#f43f5e', '#f59e0b', '#6366f1'],
+                            borderRadius: 8
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } }
+                    }
+                });
+            }
+
+            // Expense Pie Chart
+            const pieCtx = document.getElementById('expensePieChart')?.getContext('2d');
+            if (pieCtx) {
+                if (pieChartInstance) pieChartInstance.destroy();
+
+                const categories = {};
+                filtered.expense.forEach(item => {
+                    const cat = (item.category || '未分類').split(' ')[0];
+                    categories[cat] = (categories[cat] || 0) + Number(item.amount || 0);
+                });
+
+                const labels = Object.keys(categories);
+                const data = Object.values(categories);
+
+                pieChartInstance = new Chart(pieCtx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: labels.length ? labels : ['無數據'],
+                        datasets: [{
+                            data: data.length ? data : [1],
+                            backgroundColor: ['#6366f1', '#ec4899', '#f59e0b', '#10b981', '#8b5cf6', '#64748b']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                });
+            }
+        }
+
+        function setDashboardQuickFilter(mode) {
+            currentFilterMode = mode;
+            const btnCurrent = document.getElementById('btn-filter-currentMonth');
+            const btnLast = document.getElementById('btn-filter-lastMonth');
+            const btnAll = document.getElementById('btn-filter-all');
+            const yearSelect = document.getElementById('filter-year-select');
+            const monthSelect = document.getElementById('filter-month-select');
+
+            [btnCurrent, btnLast, btnAll].forEach(b => {
+                if (b) b.className = "px-3 py-1.5 text-xs font-medium rounded-lg text-slate-600 hover:text-slate-900 transition";
+            });
+
+            if (mode === 'currentMonth') {
+                if (btnCurrent) btnCurrent.className = "px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-brand-600 shadow-sm transition";
+                if (yearSelect) yearSelect.value = '2026';
+                if (monthSelect) monthSelect.value = '10';
+            } else if (mode === 'lastMonth') {
+                if (btnLast) btnLast.className = "px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-brand-600 shadow-sm transition";
+                if (yearSelect) yearSelect.value = '2026';
+                if (monthSelect) monthSelect.value = '09';
+            } else if (mode === 'all') {
+                if (btnAll) btnAll.className = "px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-brand-600 shadow-sm transition";
+            }
+
+            refreshCurrentView();
+        }
+        window.setDashboardQuickFilter = setDashboardQuickFilter;
+
+        function onCustomDateChange() {
+            currentFilterMode = 'custom';
+            const btnCurrent = document.getElementById('btn-filter-currentMonth');
+            const btnLast = document.getElementById('btn-filter-lastMonth');
+            const btnAll = document.getElementById('btn-filter-all');
+            [btnCurrent, btnLast, btnAll].forEach(b => {
+                if (b) b.className = "px-3 py-1.5 text-xs font-medium rounded-lg text-slate-600 hover:text-slate-900 transition";
+            });
+            refreshCurrentView();
+        }
+        window.onCustomDateChange = onCustomDateChange;
+
+        function closeModal() {
+            const modal = document.getElementById('app-modal');
+            if (modal) modal.classList.add('hidden');
+        }
+        window.closeModal = closeModal;
+
+        function showModalNotice(title, htmlContent) {
+            const modal = document.getElementById('app-modal');
+            const modalTitle = document.getElementById('modal-title');
+            const fieldsContainer = document.getElementById('modal-dynamic-fields');
+            const submitBtn = document.getElementById('modal-submit-btn');
+
+            if (modalTitle) modalTitle.innerText = title;
+            if (fieldsContainer) fieldsContainer.innerHTML = htmlContent;
+            if (submitBtn) submitBtn.classList.add('hidden');
+
+            if (modal) modal.classList.remove('hidden');
+        }
+        window.showModalNotice = showModalNotice;
+
+        function togglePayerOtherInput(val) {
+            const container = document.getElementById('self-deduct-payer-other-container');
+            if (container) container.classList.toggle('hidden', val !== '其他');
+        }
+        window.togglePayerOtherInput = togglePayerOtherInput;
+
+        function toggleExpenseCategoryOther(val) {
+            const container = document.getElementById('expense-category-other-container');
+            if (container) container.classList.toggle('hidden', val !== '其他雜支');
+        }
+        window.toggleExpenseCategoryOther = toggleExpenseCategoryOther;
+
+        function toggleExpensePaymentType(val) {
+            const bankContainer = document.getElementById('expense-bank-container');
+            const bankOtherContainer = document.getElementById('expense-bank-other-container');
+            const payOtherContainer = document.getElementById('expense-payment-other-container');
+
+            if (['轉帳', '刷卡'].includes(val)) {
+                if (bankContainer) bankContainer.classList.remove('hidden');
+                if (payOtherContainer) payOtherContainer.classList.add('hidden');
+                const bankVal = document.getElementById('field-payment-bank')?.value;
+                if (bankOtherContainer) bankOtherContainer.classList.toggle('hidden', bankVal !== '其他');
+            } else if (val === '其他') {
+                if (bankContainer) bankContainer.classList.add('hidden');
+                if (bankOtherContainer) bankOtherContainer.classList.add('hidden');
+                if (payOtherContainer) payOtherContainer.classList.remove('hidden');
+            } else {
+                if (bankContainer) bankContainer.classList.add('hidden');
+                if (bankOtherContainer) bankOtherContainer.classList.add('hidden');
+                if (payOtherContainer) payOtherContainer.classList.add('hidden');
+            }
+        }
+        window.toggleExpensePaymentType = toggleExpensePaymentType;
+
+        function toggleExpenseBankOther(val) {
+            const container = document.getElementById('expense-bank-other-container');
+            if (container) container.classList.toggle('hidden', val !== '其他');
+        }
+        window.toggleExpenseBankOther = toggleExpenseBankOther;
+
+        function toggleInflowCategoryOther(val) {
+            const container = document.getElementById('inflow-category-other-container');
+            if (container) container.classList.toggle('hidden', val !== '其他');
+        }
+        window.toggleInflowCategoryOther = toggleInflowCategoryOther;
+
+        function toggleInflowPaymentType(val) {
+            const bankContainer = document.getElementById('inflow-bank-container');
+            const bankOtherContainer = document.getElementById('inflow-bank-other-container');
+            const payOtherContainer = document.getElementById('inflow-payment-other-container');
+            const lastFiveContainer = document.getElementById('inflow-last-five-container');
+
+            if (val === '匯款') {
+                if (bankContainer) bankContainer.classList.remove('hidden');
+                if (payOtherContainer) payOtherContainer.classList.add('hidden');
+                if (lastFiveContainer) lastFiveContainer.classList.remove('hidden');
+                const bankVal = document.getElementById('field-inflow-bank')?.value;
+                if (bankOtherContainer) bankOtherContainer.classList.toggle('hidden', bankVal !== '其他');
+            } else if (val === '其他') {
+                if (bankContainer) bankContainer.classList.add('hidden');
+                if (bankOtherContainer) bankOtherContainer.classList.add('hidden');
+                if (payOtherContainer) payOtherContainer.classList.remove('hidden');
+                if (lastFiveContainer) lastFiveContainer.classList.add('hidden');
+            } else {
+                if (bankContainer) bankContainer.classList.add('hidden');
+                if (bankOtherContainer) bankOtherContainer.classList.add('hidden');
+                if (payOtherContainer) payOtherContainer.classList.add('hidden');
+                if (lastFiveContainer) lastFiveContainer.classList.add('hidden');
+            }
+        }
+        window.toggleInflowPaymentType = toggleInflowPaymentType;
+
+        function toggleInflowBankOther(val) {
+            const container = document.getElementById('inflow-bank-other-container');
+            if (container) container.classList.toggle('hidden', val !== '其他');
+        }
+        window.toggleInflowBankOther = toggleInflowBankOther;
+
+        async function updateItemStatus(type, id, newStatus) {
+            if (!checkAuthOrPrompt()) return;
+            const list = appData[type];
+            if (list) {
+                const item = list.find((it, idx) => (it.id ? String(it.id) === String(id) : String(idx) === String(id)));
+                if (item) {
+                    item.status = newStatus;
+                    if (window.isFirebaseConnected && typeof window.fbUpdateRecord === 'function' && typeof id === 'string' && id.length > 5 && isNaN(Number(id))) {
+                        await window.fbUpdateRecord(type, id, { status: newStatus });
+                    }
+                    showToast('狀態已更新');
+                    refreshCurrentView();
+                }
+            }
+        }
+        window.updateItemStatus = updateItemStatus;
+
+        async function deleteItem(type, id) {
+            if (!checkAuthOrPrompt()) return;
+            if (appData[type]) {
+                const idx = appData[type].findIndex((it, i) => (it.id ? String(it.id) === String(id) : String(i) === String(id)));
+                if (idx !== -1) {
+                    appData[type].splice(idx, 1);
+                    if (window.isFirebaseConnected && typeof window.fbDeleteRecord === 'function' && typeof id === 'string' && id.length > 5 && isNaN(Number(id))) {
+                        await window.fbDeleteRecord(type, id);
+                    }
+                    showToast('項目已成功刪除');
+                    refreshCurrentView();
+                }
+            }
+        }
+        window.deleteItem = deleteItem;
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toast-message');
+            if (toast && toastMsg) {
+                toastMsg.innerText = msg;
+                toast.classList.remove('translate-y-20', 'opacity-0');
+                setTimeout(() => {
+                    toast.classList.add('translate-y-20', 'opacity-0');
+                }, 2500);
+            }
+        }
+        window.showToast = showToast;
+
+        function exportAllDataToExcel() {
+            if (!checkAuthOrPrompt()) return;
+            if (typeof XLSX === 'undefined') {
+                showToast('Excel 組件載入中，請稍後再試');
+                return;
+            }
+            const wb = XLSX.utils.book_new();
+
+            const createSheet = (data, name) => {
+                const ws = XLSX.utils.json_to_sheet(data);
+                XLSX.utils.book_append_sheet(wb, ws, name);
+            };
+
+            createSheet(appData.selfDeduct, '自負額管理');
+            createSheet(appData.expense, '支出管理');
+            createSheet(appData.inflow, '進帳管理');
+            createSheet(appData.receivable, '客戶應收款');
+
+            XLSX.writeFile(wb, `戶冊數位行銷_營運財務報表_${new Date().toISOString().split('T')[0]}.xlsx`);
+            showToast('已匯出 Excel 報表');
+        }
+        window.exportAllDataToExcel = exportAllDataToExcel;
+
+        window.onload = function() {
+            const dateEl = document.getElementById('header-date');
+            if (dateEl) dateEl.innerText = new Date().toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' });
+            refreshCurrentView();
+        };
+    </script>
+</body>
+</html>
